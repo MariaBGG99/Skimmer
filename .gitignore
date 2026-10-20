@@ -1,0 +1,21 @@
+
+# Python temporary files
+__pycache__/
+*.pyc
+
+# Executables and PyInstaller output
+build/
+dist/
+*.spec
+
+# Experimental data and results
+data/
+results/
+
+# VS Code settings
+.vscode/
+
+# Local Python environments
+.venv/
+venv/
+.env
