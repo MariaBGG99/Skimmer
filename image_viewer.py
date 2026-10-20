@@ -12,7 +12,7 @@ import numpy as np
 from PySide6.QtCore import QDate, Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QLineEdit, QPushButton, QSpinBox, QFileDialog, QMessageBox,
+    QLabel, QLineEdit, QPushButton, QSpinBox, QFileDialog, QMessageBox, QProgressBar, QApplication,
     QDateEdit, QCheckBox, QComboBox, QTableWidget, QTableWidgetItem, QHeaderView, QSplitter, QAbstractItemView, QDialog,
 )
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -161,6 +161,13 @@ class ImageViewer(QMainWindow):
         load_button = QPushButton("Load image")
         load_button.clicked.connect(self.load_image)
         controls.addWidget(load_button)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)  # Busy animation: duration cannot be predicted
+        self.progress.setFixedWidth(90)
+        self.progress.setFixedHeight(12)
+        self.progress.setVisible(False)
+        controls.addWidget(self.progress)
+        self.processing = False
         self.zoom_checkbox = QCheckBox("Zoom to ROI")
         self.zoom_checkbox.setChecked(True)
         self.zoom_checkbox.toggled.connect(self.draw_image)
@@ -221,6 +228,9 @@ class ImageViewer(QMainWindow):
         layout.addWidget(splitter, 1)
         self.status = QLabel("Select a date and shot, then click Load image.")
         layout.addWidget(self.status)
+        self.watch_indicator = QLabel("●  Surveillance stopped")
+        self.watch_indicator.setStyleSheet("color: #777777; font-weight: 600;")
+        layout.addWidget(self.watch_indicator)
 
         self.json_edit.editingFinished.connect(
             lambda: self.refresh_shot_analyses(preferred_path=Path(self.json_edit.text().strip())))
@@ -359,6 +369,7 @@ class ImageViewer(QMainWindow):
         self.surveillance_failures = {}
         self.surveil_button.setText("Stop surveillance")
         self.surveillance_timer.start()
+        self.update_watch_indicator()
         self.status.setText(
             "Surveillance active — " +
             ("only shots arriving after start" if mode == "new" else "all complete shots")
@@ -370,10 +381,34 @@ class ImageViewer(QMainWindow):
         self.surveillance_mode = None
         if hasattr(self, "surveil_button"):
             self.surveil_button.setText("Surveil directory")
+        if hasattr(self, "watch_indicator"):
+            self.update_watch_indicator()
+
+    def update_watch_indicator(self):
+        """A steady status dot while surveillance is waiting for new shots."""
+        if self.surveillance_mode is None:
+            self.watch_indicator.setText("●  Surveillance stopped")
+            colour = "#777777"
+        elif self.processing:
+            self.watch_indicator.setText("●  Processing image…")
+            colour = "#b87912"
+        else:
+            self.watch_indicator.setText("●  Watching for new images")
+            colour = "#21834a"
+        self.watch_indicator.setStyleSheet(f"color: {colour}; font-weight: 600;")
+
+    def set_processing(self, active, message=None):
+        """Animate only for manual loads; surveillance uses a quiet status dot."""
+        self.processing = active
+        self.progress.setVisible(active and self.surveillance_mode is None)
+        if message is not None:
+            self.status.setText(message)
+        self.update_watch_indicator()
+        QApplication.processEvents()
 
     def surveil_tick(self):
         """Poll for complete triplets; retry shots while their JSON analysis is pending."""
-        if self.surveillance_mode is None:
+        if self.surveillance_mode is None or self.processing:
             return
         try:
             shots = sorted(self.available_shots() - self.surveillance_baseline - self.surveillance_done)
@@ -383,6 +418,7 @@ class ImageViewer(QMainWindow):
         # Process at most two per poll to keep the interface responsive.
         for shot in shots[:2]:
             try:
+                self.set_processing(True, f"Surveillance: analysing shot {shot}…")
                 json_path = Path(self.json_edit.text().strip())
                 image_dir = Path(self.image_dir_edit.text().strip())
                 image, roi, paths, entry, detected, raw = load_shot(json_path, shot, image_dir, self.image_stem())
@@ -400,6 +436,7 @@ class ImageViewer(QMainWindow):
                 self.update_results(entry)
                 self.draw_image()
                 self.save_button.setEnabled(True)
+                self.set_processing(True, f"Surveillance: saving shot {shot} PNG…")
                 output = self.export_png()
                 self.surveillance_done.add(shot)
                 self.surveillance_failures.pop(shot, None)
@@ -410,8 +447,17 @@ class ImageViewer(QMainWindow):
                 if self.surveillance_failures.get(shot) != message:
                     self.status.setText(f"Waiting for shot {shot}: {message}")
                 self.surveillance_failures[shot] = message
+            finally:
+                self.set_processing(False)
+                if self.surveillance_mode is not None and shot in self.surveillance_done:
+                    self.status.setText(
+                        f"Surveillance active — last saved shot {shot} "
+                        f"({len(self.surveillance_done)} saved this session)")
 
     def load_image(self):
+        if self.processing:
+            return
+        self.set_processing(True, f"Loading shot {self.shot_spin.value()}…")
         try:
             json_path = Path(self.json_edit.text().strip())
             shot = self.shot_spin.value()
@@ -430,6 +476,8 @@ class ImageViewer(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Could not load image", str(exc))
             self.status.setText(str(exc))
+        finally:
+            self.set_processing(False)
 
     @staticmethod
     def format_result(item):
