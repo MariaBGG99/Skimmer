@@ -1,14 +1,11 @@
 """Raw camera-count inspector for Yb ASC triplets.
 
-
-
 Install: python -m pip install numpy matplotlib PySide6
 
 Run:     python raw_image_inspector.py
 
-
-
 No subtraction, optical-density calculation, fitting, or image normalisation.
+
 Images are rotated 90 degrees anticlockwise. The displayed Y axis starts at zero at the bottom, without changing the visible image orientation.
 
 """
@@ -27,7 +24,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 
     QFileDialog, QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView,
 
-    QCheckBox)
+    QCheckBox, QTabWidget, QTextBrowser)
 
 from matplotlib.figure import Figure
 
@@ -37,21 +34,11 @@ from matplotlib.widgets import RectangleSelector
 
 from matplotlib.patches import Rectangle
 
-
-
 IMAGE_ROOT = Path(r"Z:\Ytterbium\Experimental_results\ascii_Images")
-
-
-
-
 
 def image_folder_for_date(date):
 
     return IMAGE_ROOT / str(date.year()) / date.toString('MMM') / date.toString('dd')
-
-
-
-
 
 def load_asc(path):
 
@@ -68,10 +55,6 @@ def load_asc(path):
         raise ValueError(f"Not a two-dimensional image: {path}")
 
     return array
-
-
-
-
 
 class RawImageInspector(QMainWindow):
 
@@ -93,15 +76,43 @@ class RawImageInspector(QMainWindow):
 
         self.roi_patches = []
 
-
-
         central = QWidget()
 
         self.setCentralWidget(central)
 
-        layout = QVBoxLayout(central)
-
-
+        outer_layout = QVBoxLayout(central)
+        tabs = QTabWidget()
+        outer_layout.addWidget(tabs)
+        viewer = QWidget()
+        tabs.addTab(viewer, 'Raw image viewer')
+        instructions = QTextBrowser()
+        instructions.setOpenExternalLinks(False)
+        instructions.setHtml("""
+        <h2>Raw image inspector — Instructions</h2>
+        <h3>1. Loading raw images</h3>
+        <p>Choose the experiment date and species, then check the ASC folder path or use
+        <b>Browse</b> to select a different folder. Enter the shot number and click
+        <b>Load raw images</b>. The three ASC files (a, b and c) are displayed side by side.</p>
+        <h3>2. Image display</h3>
+        <p>The images show raw camera counts without subtraction, optical-density
+        calculation, fitting or normalisation. They are rotated 90° anticlockwise,
+        with Y increasing upwards from zero at the bottom.</p>
+        <p><b>Same colour scale for all three</b> applies a common minimum and maximum
+        across the three images. Untick it to scale each image independently.</p>
+        <h3>3. Selecting a region</h3>
+        <p>Drag a rectangle on an image to select a region of interest (ROI).
+        Alternatively, enter the square centre X and Y and its side length in pixels,
+        then click <b>Apply square</b>. Tick <b>Click image to position square</b>
+        to place the square by clicking an image. Use <b>Clear selected region</b>
+        to return to statistics for the full image.</p>
+        <h3>4. Counts and statistics</h3>
+        <p>The table reports the number of pixels, mean, minimum, maximum and standard
+        deviation of raw counts in the selected region for each image. Without a
+        selection, these statistics cover the full image. Click a pixel (when
+        square-placement mode is off) to read its exact counts in all three images.</p>
+        """)
+        tabs.addTab(instructions, 'Instructions')
+        layout = QVBoxLayout(viewer)
 
         top = QHBoxLayout()
 
@@ -143,8 +154,6 @@ class RawImageInspector(QMainWindow):
 
         layout.addLayout(top)
 
-
-
         pathrow = QHBoxLayout()
 
         pathrow.addWidget(QLabel('ASC folder:'))
@@ -160,8 +169,6 @@ class RawImageInspector(QMainWindow):
         pathrow.addWidget(browse)
 
         layout.addLayout(pathrow)
-
-
 
         opts = QHBoxLayout()
 
@@ -186,29 +193,48 @@ class RawImageInspector(QMainWindow):
         layout.addLayout(opts)
 
         square_row = QHBoxLayout()
+
         square_row.addWidget(QLabel('Square centre X:'))
+
         self.centre_x = QSpinBox()
+
         self.centre_x.setRange(0, 100000)
+
         square_row.addWidget(self.centre_x)
+
         square_row.addWidget(QLabel('Centre Y:'))
+
         self.centre_y = QSpinBox()
+
         self.centre_y.setRange(0, 100000)
+
         square_row.addWidget(self.centre_y)
+
         square_row.addWidget(QLabel('Side length (pixels):'))
+
         self.square_size = QSpinBox()
+
         self.square_size.setRange(1, 100000)
+
         self.square_size.setValue(50)
+
         square_row.addWidget(self.square_size)
+
         apply_square = QPushButton('Apply square')
+
         apply_square.clicked.connect(self.apply_square)
+
         square_row.addWidget(apply_square)
+
         self.click_to_centre = QCheckBox('Click image to position square')
+
         self.click_to_centre.toggled.connect(self.update_selection_mode)
+
         square_row.addWidget(self.click_to_centre)
+
         square_row.addStretch()
+
         layout.addLayout(square_row)
-
-
 
         self.figure = Figure(figsize=(14, 5), constrained_layout=True)
 
@@ -217,8 +243,6 @@ class RawImageInspector(QMainWindow):
         self.canvas.mpl_connect('button_press_event', self.pixel_clicked)
 
         layout.addWidget(self.canvas, 1)
-
-
 
         self.region_label = QLabel('Region: full image (until you draw a rectangle)')
 
@@ -248,13 +272,9 @@ class RawImageInspector(QMainWindow):
 
         self.update_folder()
 
-
-
     def update_folder(self):
 
         self.folder.setText(str(image_folder_for_date(self.date_edit.date())))
-
-
 
     def browse_folder(self):
 
@@ -267,8 +287,6 @@ class RawImageInspector(QMainWindow):
         if selected:
 
             self.folder.setText(selected)
-
-
 
     def load_images(self):
 
@@ -287,8 +305,11 @@ class RawImageInspector(QMainWindow):
                     raise FileNotFoundError(f'ASC file not found: {path}')
 
             # Rotate 90 degrees anticlockwise, then reverse the array rows
+
             # so origin="lower" keeps the *same visual orientation*.
+
             # Coordinates and square selection now count Y from the bottom.
+
             arrays = [np.flipud(np.rot90(load_asc(path), k=1)) for path in paths]
 
             if not (arrays[0].shape == arrays[1].shape == arrays[2].shape):
@@ -304,9 +325,13 @@ class RawImageInspector(QMainWindow):
         self.arrays = arrays
 
         self.centre_x.setMaximum(arrays[0].shape[1] - 1)
+
         self.centre_y.setMaximum(arrays[0].shape[0] - 1)
+
         self.square_size.setMaximum(min(arrays[0].shape))
+
         self.centre_x.setValue(arrays[0].shape[1] // 2)
+
         self.centre_y.setValue(arrays[0].shape[0] // 2)
 
         self.region = None
@@ -318,8 +343,6 @@ class RawImageInspector(QMainWindow):
         self.pixel_label.setText('Click an individual pixel to read its exact counts in a, b and c.')
 
         self.status.setText('Loaded: ' + ', '.join(p.name for p in paths))
-
-
 
     def draw_images(self, *_):
 
@@ -366,6 +389,7 @@ class RawImageInspector(QMainWindow):
                                          spancoords='data', interactive=False)
 
             selector.set_active(not self.click_to_centre.isChecked())
+
             self.selectors.append(selector)
 
             if self.region is not None:
@@ -381,8 +405,6 @@ class RawImageInspector(QMainWindow):
                 self.roi_patches.append(patch)
 
         self.canvas.draw_idle()
-
-
 
     def rectangle_selected(self, click, release):
 
@@ -410,31 +432,50 @@ class RawImageInspector(QMainWindow):
 
         self.update_statistics()
 
-
-
     def update_selection_mode(self, *_):
+
         for selector in self.selectors:
+
             selector.set_active(not self.click_to_centre.isChecked())
 
     def apply_square(self):
+
         """Square coordinates refer to the rotated image with Y=0 at the bottom."""
+
         if self.arrays is None:
+
             QMessageBox.information(self, 'No images', 'Load the raw images first.')
+
             return
+
         height, width = self.arrays[0].shape
+
         side = self.square_size.value()
+
         cx, cy = self.centre_x.value(), self.centre_y.value()
+
         # Exact side length for odd and even squares; centre is the central
+
         # pixel for odd sizes and the upper-left central pixel for even sizes.
+
         x0 = cx - (side - 1) // 2
+
         y0 = cy - (side - 1) // 2
+
         x1, y1 = x0 + side, y0 + side
+
         if x0 < 0 or y0 < 0 or x1 > width or y1 > height:
+
             QMessageBox.warning(self, 'Square outside image',
+
                                 'Choose a centre and side length that fit within the rotated image.')
+
             return
+
         self.region = (y0, y1, x0, x1)
+
         self.draw_images()
+
         self.update_statistics()
 
     def clear_region(self):
@@ -446,8 +487,6 @@ class RawImageInspector(QMainWindow):
             self.draw_images()
 
             self.update_statistics()
-
-
 
     def update_statistics(self):
 
@@ -479,8 +518,6 @@ class RawImageInspector(QMainWindow):
 
                 self.table.setItem(row, col, QTableWidgetItem(field))
 
-
-
     def pixel_clicked(self, event):
 
         if self.arrays is None or event.inaxes not in self.axes or event.xdata is None or event.ydata is None:
@@ -490,9 +527,13 @@ class RawImageInspector(QMainWindow):
         x, y = int(round(event.xdata)), int(round(event.ydata))
 
         if self.click_to_centre.isChecked():
+
             self.centre_x.setValue(x)
+
             self.centre_y.setValue(y)
+
             self.apply_square()
+
             return
 
         h, w = self.arrays[0].shape
@@ -506,10 +547,6 @@ class RawImageInspector(QMainWindow):
         self.pixel_label.setText(f'Pixel (x={x}, y={y}) — laser + atoms (a): {a:g} counts; '
 
                                  f'laser only (b): {b:g} counts; reference (c): {c:g} counts')
-
-
-
-
 
 if __name__ == '__main__':
 
